@@ -1,0 +1,23 @@
+# Telegram Bot Framework
+aiogram==3.7.0
+
+# Supabase Client
+supabase==2.3.4
+
+# PDF Generation with Unicode support
+reportlab==4.0.9
+
+# QR Code Generation (local)
+qrcode[pil]==7.4.2
+Pillow==10.2.0
+
+# Environment variables
+python-dotenv==1.0.1
+
+# HTTP client
+aiohttp==3.9.3
+
+# Additional dependencies
+certifi==2024.2.2
+charset-normalizer==3.3.2
+idna==3.6

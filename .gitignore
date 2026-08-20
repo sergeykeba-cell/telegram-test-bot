@@ -1,0 +1,35 @@
+# Секреты и конфиги
+.env
+*.env
+
+# Виртуальное окружение
+venv/
+__pycache__/
+*.pyc
+
+# Docker / данные БД
+n8n-docker/postgres_data/
+n8n-docker/*_data/
+
+# Бэкапы
+*.backup
+bot.py.backup
+
+# Прочее
+.DS_Store
+*.log
+
+# n8n / nginx runtime data (пропущено первым паттерном)
+n8n-docker/nginx/data/
+n8n-docker/n8n_data/
+
+# Базы данных и бэкапы
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.db
+*.backup
+
+# Тестовые артефакты
+tests.db
+mini-app/Untitled
