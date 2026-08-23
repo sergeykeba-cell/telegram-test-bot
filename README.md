@@ -293,4 +293,5 @@ sudo journalctl -u psycho-bot -f
 
 **Версія:** 2.0  
 **Дата:** 13.03.2026  
-**Автор:** Claude (Anthropic)
+**Автор:** Сергій Кеба
+
