@@ -30,4 +30,4 @@ This project is a Telegram bot + Mini App framework for conducting session-based
 
 ## Disclosure Policy
 
-We ask that you give us a reasonable amount of time to address the issue before any public disclosure. We will credit reporters (with permission) once a fix is released.
+We ask that you give us a reasonable amount of time to address the issue before any public disclosure. We will credit reporters github.com/sergeykeba-cell once a fix is released.
