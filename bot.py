@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Telegram Bot — Психодіагностична платформа v3.0
-З Supabase, детальними PDF з українською мовою та локальною генерацією QR
+Telegram Bot — Психодіагностична платформа
+Оновлена версія з меню, обробкою результатів та PDF звітами
 
 Залежності:
-    pip install aiogram==3.7.0 supabase python-dotenv aiohttp reportlab qrcode[pil]
+    pip install aiogram==3.7.0 asyncpg python-dotenv aiohttp reportlab
 """
 
 import asyncio
@@ -14,10 +14,9 @@ import os
 import uuid
 from datetime import datetime
 from io import BytesIO
-from typing import Optional, Dict, Any, List
 
 import aiohttp
-import qrcode
+import asyncpg
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
@@ -32,16 +31,11 @@ from aiohttp import web
 from dotenv import load_dotenv
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import cm, mm
-from reportlab.platypus import (
-    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
-    PageBreak, Image as RLImage
-)
+from reportlab.lib.units import cm
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_JUSTIFY
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from supabase import create_client, Client
 
 load_dotenv()
 
@@ -49,150 +43,18 @@ load_dotenv()
 # КОНФІГУРАЦІЯ
 # ══════════════════════════════════════════════════════════════
 
-BOT_TOKEN       = os.getenv("BOT_TOKEN")
-SUPABASE_URL    = os.getenv("SUPABASE_URL")
-SUPABASE_KEY    = os.getenv("SUPABASE_KEY")
-MINI_APP_URL    = os.getenv("MINI_APP_URL")
-WEBHOOK_PORT    = int(os.getenv("WEBHOOK_PORT", "8080"))
-WEBHOOK_PATH    = "/result"
-ADMIN_TG_ID     = int(os.getenv("ADMIN_TG_ID", "0"))
+BOT_TOKEN     = os.getenv("BOT_TOKEN")
+DATABASE_URL  = os.getenv("DATABASE_URL")      # postgresql://user:pass@host/db
+MINI_APP_URL  = os.getenv("MINI_APP_URL")      # https://your-domain.com/miniapp.html
+WEBHOOK_PORT  = int(os.getenv("WEBHOOK_PORT", "8080"))
+WEBHOOK_PATH  = "/result"
+ADMIN_TG_ID   = int(os.getenv("ADMIN_TG_ID", "0"))
 
 # ── Тести ──────────────────────────────────────────────────────
 TESTS = {
-    "pcl5": {
-        "name": "PCL-5 (ПТСР)",
-        "name_full": "Перелік симптомів посттравматичного стресу",
-        "emoji": "🧠",
-        "description": "Оцінка симптомів посттравматичного стресового розладу згідно критеріїв DSM-5"
-    },
-    "minmult": {
-        "name": "Міні-Мульт",
-        "name_full": "Скорочений багатофакторний особистісний опитувальник (Mini-MMPI)",
-        "emoji": "📋",
-        "description": "Експрес-діагностика особистісних характеристик та психологічних відхилень"
-    },
-    "schmishek": {
-        "name": "Шмішек",
-        "name_full": "Опитувальник акцентуацій характеру за Леонгардом-Шмішеком",
-        "emoji": "🔍",
-        "description": "Визначення типів акцентуацій характеру та особистісних особливостей"
-    }
-}
-
-# Інтерпретації для кожного тесту
-INTERPRETATIONS = {
-    "pcl5": {
-        "low": {
-            "title": "Мінімальний рівень симптомів ПТСР",
-            "description": "Результати вказують на відсутність або мінімальну вираженість симптомів посттравматичного стресового розладу. Показники в межах норми.",
-            "recommendations": [
-                "Психологічне втручання не потрібне",
-                "Рекомендується підтримка здорового способу життя",
-                "При необхідності - профілактичні консультації"
-            ]
-        },
-        "moderate": {
-            "title": "Легкий рівень симптомів ПТСР",
-            "description": "Виявлено легкі симптоми посттравматичного стресу. Рекомендується моніторинг стану та профілактична робота.",
-            "recommendations": [
-                "Консультація психолога для оцінки стану",
-                "Можливе проведення підтримуючої психотерапії",
-                "Моніторинг динаміки симптомів"
-            ]
-        },
-        "high": {
-            "title": "Помірний рівень симптомів ПТСР",
-            "description": "Виявлено помірно виражені симптоми ПТСР, які можуть суттєво впливати на якість життя. Рекомендована психотерапевтична допомога.",
-            "recommendations": [
-                "Консультація психотерапевта обов'язкова",
-                "Розгляд можливості травма-фокусованої терапії (EMDR, CPT)",
-                "Регулярний моніторинг стану"
-            ]
-        },
-        "severe": {
-            "title": "Важкий рівень симптомів ПТСР",
-            "description": "Виявлено виражені симптоми посттравматичного стресового розладу, які значно впливають на функціонування. Необхідна спеціалізована допомога.",
-            "recommendations": [
-                "Термінова консультація психіатра/психотерапевта",
-                "Комплексна терапія (психотерапія + можлива медикаментозна підтримка)",
-                "Регулярний моніторинг стану під наглядом спеціаліста"
-            ]
-        }
-    },
-    "minmult": {
-        "low": {
-            "title": "Показники в межах норми",
-            "description": "Профіль особистості без виражених відхилень. Психологічні захисти адаптивні, емоційний стан стабільний.",
-            "recommendations": [
-                "Спеціалізована допомога не потрібна",
-                "За бажання - консультації для особистісного розвитку"
-            ]
-        },
-        "moderate": {
-            "title": "Субнормативні показники",
-            "description": "Виявлено окремі акцентуації особистості, які можуть проявлятися в стресових ситуаціях. Рекомендується уточнююча діагностика.",
-            "recommendations": [
-                "Консультація психолога для детальної оцінки",
-                "Можлива короткострокова психологічна підтримка",
-                "Робота над підвищенням стресостійкості"
-            ]
-        },
-        "high": {
-            "title": "Виявлено відхилення в профілі особистості",
-            "description": "Профіль особистості містить виражені відхилення, які можуть впливати на адаптацію та якість життя.",
-            "recommendations": [
-                "Консультація клінічного психолога обов'язкова",
-                "Розгляд можливості психотерапевтичної роботи",
-                "Регулярний моніторинг стану"
-            ]
-        },
-        "severe": {
-            "title": "Виражені відхилення особистісного профілю",
-            "description": "Виявлено значні відхилення в профілі особистості, які потребують професійної допомоги.",
-            "recommendations": [
-                "Консультація психіатра/клінічного психолога обов'язкова",
-                "Комплексна психотерапія",
-                "Можлива необхідність медикаментозної підтримки"
-            ]
-        }
-    },
-    "schmishek": {
-        "low": {
-            "title": "Акцентуації не виявлено",
-            "description": "Профіль особистості гармонійний, без виражених акцентуацій характеру. Адаптаційні можливості в межах норми.",
-            "recommendations": [
-                "Спеціалізована допомога не потрібна",
-                "Підтримка гармонійного розвитку особистості"
-            ]
-        },
-        "moderate": {
-            "title": "Помірні акцентуації характеру",
-            "description": "Виявлено окремі акцентуації характеру, які є варіантом норми. Можуть проявлятися в специфічних ситуаціях.",
-            "recommendations": [
-                "Врахування особливостей при побудові комунікації",
-                "За бажання - консультації для кращого самопізнання",
-                "Розвиток компенсаторних механізмів"
-            ]
-        },
-        "high": {
-            "title": "Виражені акцентуації характеру",
-            "description": "Виявлено виражені акцентуації, які можуть ускладнювати адаптацію в певних ситуаціях.",
-            "recommendations": [
-                "Консультація психолога для роботи з акцентуаціями",
-                "Розвиток стратегій компенсації",
-                "Можлива короткострокова психотерапія"
-            ]
-        },
-        "severe": {
-            "title": "Дуже виражені акцентуації характеру",
-            "description": "Виявлено множинні виражені акцентуації, які можуть суттєво впливати на соціальну адаптацію.",
-            "recommendations": [
-                "Консультація клінічного психолога обов'язкова",
-                "Психотерапевтична робота з акцентуаціями",
-                "Розвиток адаптивних стратегій поведінки"
-            ]
-        }
-    }
+    "pcl5":     {"name": "PCL-5 (ПТСР)",              "emoji": "🧠"},
+    "minmult":  {"name": "Міні-Мульт (скор. MMPI)",   "emoji": "📋"},
+    "schmishek":{"name": "Шмішек (акцентуації)",      "emoji": "🔍"},
 }
 
 # ── Логування ──────────────────────────────────────────────────
@@ -213,468 +75,269 @@ bot = Bot(token=BOT_TOKEN)
 dp  = Dispatcher(storage=MemoryStorage())
 router = Router()
 dp.include_router(router)
-
-# Supabase клієнт
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+db_pool: asyncpg.Pool = None
 
 
 # ══════════════════════════════════════════════════════════════
-# SUPABASE ФУНКЦІЇ
+# БАЗА ДАНИХ
 # ══════════════════════════════════════════════════════════════
+
+async def get_db() -> asyncpg.Pool:
+    global db_pool
+    if db_pool is None:
+        db_pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=5)
+    return db_pool
+
 
 async def ensure_doctor(telegram_id: int, full_name: str) -> int:
     """Повертає doctor.id, створює запис якщо не існує."""
-    try:
-        # Спробувати знайти існуючого
-        result = supabase.table("doctors")\
-            .select("id")\
-            .eq("telegram_id", telegram_id)\
-            .execute()
-        
-        if result.data:
-            # Оновити ім'я
-            supabase.table("doctors")\
-                .update({"full_name": full_name})\
-                .eq("telegram_id", telegram_id)\
-                .execute()
-            return result.data[0]["id"]
-        else:
-            # Створити нового
-            result = supabase.table("doctors")\
-                .insert({"telegram_id": telegram_id, "full_name": full_name})\
-                .execute()
-            return result.data[0]["id"]
-    except Exception as e:
-        log.error(f"Error in ensure_doctor: {e}")
-        raise
+    pool = await get_db()
+    row = await pool.fetchrow(
+        """
+        INSERT INTO doctors (telegram_id, full_name)
+        VALUES ($1, $2)
+        ON CONFLICT (telegram_id) DO UPDATE
+            SET full_name = EXCLUDED.full_name
+        RETURNING id
+        """,
+        telegram_id, full_name
+    )
+    return row["id"]
 
 
 async def create_session(doctor_id: int, patient_name: str, test_type: str) -> str:
     """Створює сесію тестування. Повертає token (UUID)."""
-    try:
-        token = str(uuid.uuid4())
-        supabase.table("tokens").insert({
-            "token": token,
-            "doctor_id": doctor_id,
-            "full_name": patient_name,
-            "test_type": test_type,
-            "status": "pending"
-        }).execute()
-        return token
-    except Exception as e:
-        log.error(f"Error in create_session: {e}")
-        raise
+    pool = await get_db()
+    token = str(uuid.uuid4())
+    await pool.execute(
+        """
+        INSERT INTO tokens
+            (token, doctor_id, full_name, test_type, status)
+        VALUES ($1, $2, $3, $4, 'pending')
+        """,
+        token, doctor_id, patient_name, test_type
+    )
+    return token
 
 
-async def get_session(token: str) -> Optional[Dict]:
+async def get_session(token: str):
     """Повертає сесію за токеном."""
-    try:
-        result = supabase.table("tokens")\
-            .select("*, doctor_id")\
-            .eq("token", token)\
-            .single()\
-            .execute()
-        
-        if result.data:
-            # Додати patient_name як alias для full_name
-            result.data["patient_name"] = result.data.get("full_name")
-            return result.data
-        return None
-    except Exception as e:
-        log.error(f"Error in get_session: {e}")
-        return None
+    pool = await get_db()
+    return await pool.fetchrow(
+        "SELECT *, full_name AS patient_name FROM tokens WHERE token = $1",
+        token
+    )
 
 
-async def get_result(token: str) -> Optional[Dict]:
+async def get_result(token: str):
     """Повертає результат тесту за токеном."""
-    try:
-        result = supabase.table("results")\
-            .select("*, tokens!inner(doctor_id, full_name)")\
-            .eq("token", token)\
-            .order("completed_at", desc=True)\
-            .limit(1)\
-            .execute()
-        
-        if result.data:
-            data = result.data[0]
-            # Flatten структуру
-            data["doctor_id"] = data["tokens"]["doctor_id"]
-            data["patient_name"] = data["tokens"]["full_name"]
-            return data
-        return None
-    except Exception as e:
-        log.error(f"Error in get_result: {e}")
-        return None
+    pool = await get_db()
+    return await pool.fetchrow(
+        """
+        SELECT r.*, t.doctor_id, t.full_name as patient_name
+        FROM results r
+        JOIN tokens t ON t.token = r.token
+        WHERE r.token = $1
+        ORDER BY r.completed_at DESC
+        LIMIT 1
+        """,
+        token
+    )
 
 
-async def get_doctor_sessions(doctor_id: int, status: str = None) -> List[Dict]:
+async def get_doctor_sessions(doctor_id: int, status: str = None):
     """Повертає сесії лікаря."""
-    try:
-        query = supabase.table("tokens")\
-            .select("token, full_name, test_type, created_at, status")\
-            .eq("doctor_id", doctor_id)
-        
-        if status:
-            query = query.eq("status", status)
-        
-        result = query.order("created_at", desc=True)\
-            .limit(20)\
-            .execute()
-        
-        # Для кожної completed сесії додати результат
-        sessions = result.data if result.data else []
-        
-        for session in sessions:
-            if session["status"] == "completed":
-                res = await get_result(session["token"])
-                if res:
-                    session["score"] = res.get("score")
-                    session["severity"] = res.get("severity")
-        
-        return sessions
-    except Exception as e:
-        log.error(f"Error in get_doctor_sessions: {e}")
-        return []
-
-
-async def get_doctor_by_telegram_id(telegram_id: int) -> Optional[Dict]:
-    """Повертає лікаря за telegram_id."""
-    try:
-        result = supabase.table("doctors")\
-            .select("*")\
-            .eq("telegram_id", telegram_id)\
-            .single()\
-            .execute()
-        return result.data if result.data else None
-    except Exception as e:
-        log.error(f"Error in get_doctor_by_telegram_id: {e}")
-        return None
-
-
-# ══════════════════════════════════════════════════════════════
-# QR-ГЕНЕРАЦІЯ (ЛОКАЛЬНО)
-# ══════════════════════════════════════════════════════════════
-
-def generate_qr_bytes(url: str) -> bytes:
-    """Генерує QR код локально через qrcode"""
-    qr = qrcode.QRCode(
-        version=1,
-        error_correction=qrcode.constants.ERROR_CORRECT_M,
-        box_size=10,
-        border=4,
-    )
-    qr.add_data(url)
-    qr.make(fit=True)
+    pool = await get_db()
     
-    img = qr.make_image(fill_color="black", back_color="white")
-    
-    # Зберегти в BytesIO
-    buffer = BytesIO()
-    img.save(buffer, format='PNG')
-    buffer.seek(0)
-    return buffer.read()
+    if status:
+        query = """
+            SELECT t.token, t.full_name AS patient_name, t.test_type, 
+                   t.created_at, t.status, r.score, r.severity
+            FROM tokens t
+            LEFT JOIN results r ON r.token = t.token
+            WHERE t.doctor_id = $1 AND t.status = $2
+            ORDER BY t.created_at DESC
+            LIMIT 20
+        """
+        return await pool.fetch(query, doctor_id, status)
+    else:
+        query = """
+            SELECT t.token, t.full_name AS patient_name, t.test_type, 
+                   t.created_at, t.status, r.score, r.severity
+            FROM tokens t
+            LEFT JOIN results r ON r.token = t.token
+            WHERE t.doctor_id = $1
+            ORDER BY t.created_at DESC
+            LIMIT 20
+        """
+        return await pool.fetch(query, doctor_id)
 
 
 # ══════════════════════════════════════════════════════════════
-# PDF ГЕНЕРАЦІЯ З УКРАЇНСЬКОЮ МОВОЮ
+# QR-ГЕНЕРАЦІЯ
 # ══════════════════════════════════════════════════════════════
 
-# Реєстрація українського шрифту
-def register_fonts():
-    """Реєстрація TTF шрифтів з підтримкою Unicode"""
-    try:
-        # Спробувати знайти DejaVuSans в системі
-        font_paths = [
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            "/usr/share/fonts/dejavu/DejaVuSans.ttf",
-            "/System/Library/Fonts/Supplemental/DejaVuSans.ttf",
-            "C:\\Windows\\Fonts\\DejaVuSans.ttf",
-            "./fonts/DejaVuSans.ttf"
-        ]
-        
-        font_bold_paths = [
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-            "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
-            "/System/Library/Fonts/Supplemental/DejaVuSans-Bold.ttf",
-            "C:\\Windows\\Fonts\\DejaVuSans-Bold.ttf",
-            "./fonts/DejaVuSans-Bold.ttf"
-        ]
-        
-        # Знайти перший доступний шрифт
-        font_path = None
-        for path in font_paths:
-            if os.path.exists(path):
-                font_path = path
-                break
-        
-        font_bold_path = None
-        for path in font_bold_paths:
-            if os.path.exists(path):
-                font_bold_path = path
-                break
-        
-        if font_path:
-            pdfmetrics.registerFont(TTFont('DejaVuSans', font_path))
-            log.info(f"Registered DejaVuSans from {font_path}")
-        
-        if font_bold_path:
-            pdfmetrics.registerFont(TTFont('DejaVuSans-Bold', font_bold_path))
-            log.info(f"Registered DejaVuSans-Bold from {font_bold_path}")
-        
-        return font_path is not None
-    except Exception as e:
-        log.error(f"Error registering fonts: {e}")
-        return False
-
-
-# Реєструємо шрифти при запуску
-FONTS_REGISTERED = register_fonts()
-
-
-def generate_pdf_report(result_data: Dict) -> BytesIO:
-    """Генерує детальний PDF звіт з результатами"""
-    buffer = BytesIO()
-    doc = SimpleDocTemplate(
-        buffer,
-        pagesize=A4,
-        rightMargin=2*cm,
-        leftMargin=2*cm,
-        topMargin=2*cm,
-        bottomMargin=2*cm
+async def generate_qr_bytes(url: str) -> bytes:
+    """Генерує QR код через api.qrserver.com"""
+    qr_url = (
+        f"https://api.qrserver.com/v1/create-qr-code/"
+        f"?size=400x400&data={url}&format=png&ecc=M"
     )
+    async with aiohttp.ClientSession() as session:
+        async with session.get(qr_url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+            resp.raise_for_status()
+            return await resp.read()
+
+
+# ══════════════════════════════════════════════════════════════
+# PDF ГЕНЕРАЦІЯ
+# ══════════════════════════════════════════════════════════════
+
+def generate_pdf_report(result_data: dict) -> BytesIO:
+    """Генерує PDF звіт з результатами тестування"""
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, 
+                           rightMargin=2*cm, leftMargin=2*cm,
+                           topMargin=2*cm, bottomMargin=2*cm)
     
     story = []
-    
-    # Вибір шрифту
-    if FONTS_REGISTERED:
-        normal_font = 'DejaVuSans'
-        bold_font = 'DejaVuSans-Bold'
-    else:
-        normal_font = 'Helvetica'
-        bold_font = 'Helvetica-Bold'
-        log.warning("Using Helvetica (non-Unicode) - Ukrainian text may not display correctly")
+    styles = getSampleStyleSheet()
     
     # Стилі
     title_style = ParagraphStyle(
         'CustomTitle',
-        fontName=bold_font,
-        fontSize=20,
+        parent=styles['Heading1'],
+        fontSize=18,
         textColor=colors.HexColor('#1a1a1a'),
-        spaceAfter=10*mm,
-        alignment=TA_CENTER,
-        leading=24
-    )
-    
-    subtitle_style = ParagraphStyle(
-        'CustomSubtitle',
-        fontName=normal_font,
-        fontSize=14,
-        textColor=colors.HexColor('#4a5568'),
-        spaceAfter=15*mm,
-        alignment=TA_CENTER,
-        leading=18
+        spaceAfter=30,
+        alignment=1  # CENTER
     )
     
     heading_style = ParagraphStyle(
         'CustomHeading',
-        fontName=bold_font,
+        parent=styles['Heading2'],
         fontSize=14,
         textColor=colors.HexColor('#2563eb'),
-        spaceAfter=5*mm,
-        spaceBefore=8*mm,
-        leading=18
+        spaceAfter=12,
+        spaceBefore=12
     )
     
     normal_style = ParagraphStyle(
         'CustomNormal',
-        fontName=normal_font,
+        parent=styles['Normal'],
         fontSize=11,
-        leading=16,
-        alignment=TA_JUSTIFY,
-        spaceAfter=3*mm
+        leading=14
     )
-    
-    bold_normal_style = ParagraphStyle(
-        'CustomBoldNormal',
-        fontName=bold_font,
-        fontSize=11,
-        leading=16,
-        spaceAfter=3*mm
-    )
-    
-    # Отримання даних
-    test_type = result_data.get('test_type', '')
-    test_info = TESTS.get(test_type, {})
-    test_name = test_info.get('name_full', test_info.get('name', test_type))
     
     # Заголовок
-    story.append(Paragraph("ПСИХОДІАГНОСТИЧНИЙ ЗВІТ", title_style))
-    story.append(Paragraph(test_name, subtitle_style))
+    test_name = TESTS.get(result_data.get('test_type', ''), {}).get('name', result_data.get('test_type', ''))
+    story.append(Paragraph(f"ЗВІТ ПРО ТЕСТУВАННЯ", title_style))
+    story.append(Paragraph(f"{test_name}", heading_style))
+    story.append(Spacer(1, 0.5*cm))
     
     # Основна інформація
-    story.append(Paragraph("Загальна інформація", heading_style))
-    
     info_data = [
         ['Пацієнт:', result_data.get('patient_name', '—')],
-        ['Дата проходження:', 
-         result_data.get('completed_at', datetime.now()).strftime('%d.%m.%Y о %H:%M') 
-         if isinstance(result_data.get('completed_at'), datetime) 
-         else datetime.now().strftime('%d.%m.%Y о %H:%M')],
+        ['Дата проходження:', result_data.get('completed_at', datetime.now()).strftime('%d.%m.%Y %H:%M')],
         ['Загальний бал:', str(result_data.get('score', '—'))],
+        ['Рівень тяжкості:', result_data.get('severity', '—').upper()],
     ]
     
-    # Додаємо рівень тяжкості з кольором
-    severity = result_data.get('severity', 'low')
-    severity_colors = {
-        'low': colors.HexColor('#16a34a'),
-        'moderate': colors.HexColor('#ca8a04'),
-        'high': colors.HexColor('#ea580c'),
-        'severe': colors.HexColor('#dc2626')
-    }
-    severity_labels = {
-        'low': 'Низький/Норма',
-        'moderate': 'Помірний/Субнорма',
-        'high': 'Високий/Відхилення',
-        'severe': 'Дуже високий/Виражений'
-    }
-    
-    info_table = Table(info_data, colWidths=[5*cm, 11*cm])
+    info_table = Table(info_data, colWidths=[5*cm, 10*cm])
     info_table.setStyle(TableStyle([
-        ('FONTNAME', (0, 0), (0, -1), bold_font),
-        ('FONTNAME', (1, 0), (1, -1), normal_font),
-        ('FONTSIZE', (0, 0), (-1, -1), 11),
+        ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#f4f4f5')),
+        ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
         ('ALIGN', (0, 0), (0, -1), 'RIGHT'),
         ('ALIGN', (1, 0), (1, -1), 'LEFT'),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('TOPPADDING', (0, 0), (-1, -1), 6),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+        ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+        ('FONTNAME', (1, 0), (1, -1), 'Helvetica'),
+        ('FONTSIZE', (0, 0), (-1, -1), 11),
         ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-        ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#f4f4f5')),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING', (0, 0), (-1, -1), 8),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
     ]))
     
     story.append(info_table)
-    story.append(Spacer(1, 5*mm))
+    story.append(Spacer(1, 1*cm))
     
-    # Рівень тяжкості окремо з кольором
-    severity_table = Table(
-        [['Рівень тяжкості:', severity_labels.get(severity, severity)]],
-        colWidths=[5*cm, 11*cm]
-    )
-    severity_table.setStyle(TableStyle([
-        ('FONTNAME', (0, 0), (0, 0), bold_font),
-        ('FONTNAME', (1, 0), (1, 0), bold_font),
-        ('FONTSIZE', (0, 0), (-1, -1), 11),
-        ('ALIGN', (0, 0), (0, -1), 'RIGHT'),
-        ('ALIGN', (1, 0), (1, -1), 'LEFT'),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('TOPPADDING', (0, 0), (-1, -1), 6),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-        ('BACKGROUND', (0, 0), (0, 0), colors.HexColor('#f4f4f5')),
-        ('TEXTCOLOR', (1, 0), (1, 0), severity_colors.get(severity, colors.black)),
-        ('BACKGROUND', (1, 0), (1, 0), colors.HexColor('#fafafa')),
-    ]))
-    story.append(severity_table)
-    story.append(Spacer(1, 10*mm))
+    # Інтерпретація
+    story.append(Paragraph("ІНТЕРПРЕТАЦІЯ РЕЗУЛЬТАТІВ", heading_style))
     
-    # Інтерпретація результатів
-    story.append(Paragraph("Інтерпретація результатів", heading_style))
+    severity = result_data.get('severity', 'low')
+    score = result_data.get('score', 0)
+    test_type = result_data.get('test_type', '')
     
-    interp = INTERPRETATIONS.get(test_type, {}).get(severity, {})
+    # Інтерпретація в залежності від тесту
+    if test_type == 'pcl5':
+        if severity == 'low':
+            interp = f"Загальний бал {score} вказує на мінімальний рівень симптомів ПТСР. Результат в межах норми."
+        elif severity == 'moderate':
+            interp = f"Загальний бал {score} свідчить про легкий рівень симптомів ПТСР. Рекомендується моніторинг стану."
+        elif severity == 'high':
+            interp = f"Загальний бал {score} вказує на помірний рівень симптомів ПТСР. Рекомендована консультація спеціаліста."
+        else:
+            interp = f"Загальний бал {score} свідчить про важкий рівень симптомів ПТСР. Необхідна психотерапевтична допомога."
+    elif test_type == 'minmult':
+        if severity == 'low':
+            interp = f"Результати в межах норми. Профіль особистості без виражених відхилень."
+        elif severity == 'moderate':
+            interp = f"Виявлено окремі акцентуації особистості (субнорма). Рекомендується уточнююча діагностика."
+        elif severity == 'high':
+            interp = f"Виявлено відхилення в профілі особистості. Необхідна консультація психолога."
+        else:
+            interp = f"Виражені відхилення в профілі особистості. Рекомендована психологічна допомога."
+    else:  # schmishek
+        if severity == 'low':
+            interp = f"Акцентуації характеру не виявлено. Профіль особистості в межах норми."
+        elif severity == 'moderate':
+            interp = f"Виявлено акцентуації характеру (варіант норми). Рекомендується врахування при побудові комунікації."
+        elif severity == 'high':
+            interp = f"Виявлено виражені акцентуації характеру. Рекомендована консультація психолога."
+        else:
+            interp = f"Виявлено дуже виражені акцентуації характеру. Необхідна психологічна допомога."
     
-    if interp:
-        # Заголовок інтерпретації
-        story.append(Paragraph(interp.get('title', ''), bold_normal_style))
-        story.append(Spacer(1, 3*mm))
-        
-        # Опис
-        story.append(Paragraph(interp.get('description', ''), normal_style))
-        story.append(Spacer(1, 5*mm))
-        
-        # Рекомендації
-        story.append(Paragraph("Рекомендації:", bold_normal_style))
-        for rec in interp.get('recommendations', []):
-            story.append(Paragraph(f"• {rec}", normal_style))
+    story.append(Paragraph(interp, normal_style))
+    story.append(Spacer(1, 0.5*cm))
     
-    story.append(Spacer(1, 10*mm))
-    
-    # Субшкали (якщо є в даних)
+    # Субшкали (якщо є)
     subscales = result_data.get('subscales')
-    if subscales and isinstance(subscales, dict):
-        story.append(Paragraph("Детальні показники по шкалах", heading_style))
+    if subscales:
+        story.append(Spacer(1, 0.5*cm))
+        story.append(Paragraph("Детальні показники по шкалах:", heading_style))
         
         subscale_data = [['Шкала', 'Бал']]
         for scale_name, scale_value in subscales.items():
             subscale_data.append([scale_name, str(scale_value)])
         
-        subscale_table = Table(subscale_data, colWidths=[13*cm, 3*cm])
+        subscale_table = Table(subscale_data, colWidths=[12*cm, 3*cm])
         subscale_table.setStyle(TableStyle([
-            ('FONTNAME', (0, 0), (-1, 0), bold_font),
-            ('FONTNAME', (0, 1), (0, -1), normal_font),
-            ('FONTNAME', (1, 1), (1, -1), bold_font),
-            ('FONTSIZE', (0, 0), (-1, -1), 10),
-            ('ALIGN', (0, 0), (-1, 0), 'LEFT'),
-            ('ALIGN', (0, 1), (0, -1), 'LEFT'),
-            ('ALIGN', (1, 0), (1, -1), 'CENTER'),
-            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('TOPPADDING', (0, 0), (-1, -1), 5),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
             ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2563eb')),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), 
-             [colors.white, colors.HexColor('#f9fafb')]),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('ALIGN', (1, 0), (1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 11),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f9fafb')]),
         ]))
         story.append(subscale_table)
-        story.append(Spacer(1, 10*mm))
     
-    # Важлива інформація
-    story.append(PageBreak())
-    story.append(Paragraph("Важлива інформація", heading_style))
-    
-    disclaimer = [
-        "Цей звіт носить інформаційно-діагностичний характер і НЕ є медичним діагнозом.",
-        "",
-        "Результати психодіагностичного тестування повинні інтерпретуватися "
-        "кваліфікованим спеціалістом (психологом, психотерапевтом, психіатром) "
-        "з урахуванням клінічного контексту, анамнезу та додаткових методів обстеження.",
-        "",
+    # Додаткова інформація
+    story.append(Spacer(1, 1*cm))
+    story.append(Paragraph("ВАЖЛИВО", heading_style))
+    story.append(Paragraph(
+        "Цей звіт носить інформаційний характер і не є медичним діагнозом. "
         "Для отримання професійної консультації та інтерпретації результатів "
-        "зверніться до кваліфікованого спеціаліста в галузі психічного здоров'я.",
-    ]
+        "зверніться до кваліфікованого спеціаліста.",
+        normal_style
+    ))
     
-    for line in disclaimer:
-        if line:
-            story.append(Paragraph(line, normal_style))
-        else:
-            story.append(Spacer(1, 3*mm))
-    
-    story.append(Spacer(1, 10*mm))
-    
-    # Примітки про конфіденційність
-    story.append(Paragraph("Конфіденційність", heading_style))
-    confidentiality = [
-        "Цей звіт містить конфіденційну медичну інформацію та призначений "
-        "виключно для використання лікарем та пацієнтом.",
-        "",
-        "Будь-яке розголошення, копіювання або передача третім особам без "
-        "письмової згоди пацієнта заборонено."
-    ]
-    
-    for line in confidentiality:
-        if line:
-            story.append(Paragraph(line, normal_style))
-        else:
-            story.append(Spacer(1, 3*mm))
-    
-    # Генерація PDF
-    try:
-        doc.build(story)
-        buffer.seek(0)
-        return buffer
-    except Exception as e:
-        log.error(f"Error building PDF: {e}")
-        raise
+    # Генерація
+    doc.build(story)
+    buffer.seek(0)
+    return buffer
 
 
 # ══════════════════════════════════════════════════════════════
@@ -715,12 +378,14 @@ def kb_confirm(test_type: str, patient_name: str) -> InlineKeyboardMarkup:
     ])
 
 
-def kb_result_actions(token: str) -> InlineKeyboardMarkup:
-    """Кнопки для результату"""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📥 Завантажити PDF", callback_data=f"pdf:{token}")],
-        [InlineKeyboardButton(text="◀️ Назад до списку", callback_data="menu:completed")],
-    ])
+def kb_session_item(token: str, has_result: bool = False) -> InlineKeyboardMarkup:
+    """Кнопки для окремої сесії"""
+    buttons = []
+    if has_result:
+        buttons.append([InlineKeyboardButton(text="📄 Переглянути результат", callback_data=f"result:{token}")])
+        buttons.append([InlineKeyboardButton(text="📥 Завантажити PDF", callback_data=f"pdf:{token}")])
+    buttons.append([InlineKeyboardButton(text="◀️ Назад до списку", callback_data="menu:sessions")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -863,8 +528,8 @@ async def cb_confirm(cb: CallbackQuery, state: FSMContext):
         # Посилання на Mini App
         test_url = f"{MINI_APP_URL}?token={token}"
 
-        # Генерація QR локально
-        qr_bytes = generate_qr_bytes(test_url)
+        # Генерація QR
+        qr_bytes = await generate_qr_bytes(test_url)
         qr_file  = BufferedInputFile(qr_bytes, filename=f"test_{token[:8]}.png")
 
         test_name = TESTS[test_type]["name"]
@@ -907,12 +572,17 @@ async def cmd_sessions(event, state: FSMContext):
     """Активні сесії"""
     await state.clear()
     
+    # Отримання ID лікаря
     if isinstance(event, CallbackQuery):
         user_id = event.from_user.id
     else:
         user_id = event.from_user.id
     
-    doctor = await get_doctor_by_telegram_id(user_id)
+    pool = await get_db()
+    doctor = await pool.fetchrow(
+        "SELECT id FROM doctors WHERE telegram_id = $1",
+        user_id
+    )
     
     if not doctor:
         text = "❌ Помилка: лікаря не знайдено"
@@ -938,17 +608,10 @@ async def cmd_sessions(event, state: FSMContext):
     text = "📋 *Активні сесії (тест не пройдено):*\n\n"
     for r in rows:
         test_name = TESTS.get(r["test_type"], {}).get("name", r["test_type"])
-        created   = r["created_at"]
-        # Парсинг дати якщо це строка
-        if isinstance(created, str):
-            try:
-                created = datetime.fromisoformat(created.replace('Z', '+00:00'))
-            except:
-                pass
-        created_str = created.strftime("%d.%m %H:%M") if isinstance(created, datetime) else str(created)
+        created   = r["created_at"].strftime("%d.%m %H:%M")
         short_token = str(r["token"])[:8]
-        text += f"• *{r['full_name']}* — {test_name}\n"
-        text += f"  `{short_token}...` · {created_str}\n\n"
+        text += f"• *{r['patient_name']}* — {test_name}\n"
+        text += f"  `{short_token}...` · {created}\n\n"
 
     markup = kb_main_menu()
     
@@ -964,7 +627,11 @@ async def cmd_completed(cb: CallbackQuery, state: FSMContext):
     """Завершені тести"""
     await state.clear()
     
-    doctor = await get_doctor_by_telegram_id(cb.from_user.id)
+    pool = await get_db()
+    doctor = await pool.fetchrow(
+        "SELECT id FROM doctors WHERE telegram_id = $1",
+        cb.from_user.id
+    )
     
     if not doctor:
         await cb.message.edit_text("❌ Помилка: лікаря не знайдено")
@@ -986,13 +653,7 @@ async def cmd_completed(cb: CallbackQuery, state: FSMContext):
     
     for r in rows:
         test_name = TESTS.get(r["test_type"], {}).get("name", r["test_type"])
-        created = r["created_at"]
-        if isinstance(created, str):
-            try:
-                created = datetime.fromisoformat(created.replace('Z', '+00:00'))
-            except:
-                pass
-        created_str = created.strftime("%d.%m") if isinstance(created, datetime) else "—"
+        created = r["created_at"].strftime("%d.%m")
         score = r.get("score", "—")
         severity = r.get("severity", "—")
         
@@ -1003,7 +664,7 @@ async def cmd_completed(cb: CallbackQuery, state: FSMContext):
             "severe": "🔴"
         }.get(severity, "⚪")
         
-        btn_text = f"{severity_emoji} {r['full_name']} — {test_name} ({created_str})"
+        btn_text = f"{severity_emoji} {r['patient_name']} — {test_name} ({created})"
         buttons.append([InlineKeyboardButton(
             text=btn_text,
             callback_data=f"view:{r['token']}"
@@ -1021,7 +682,7 @@ async def cmd_completed(cb: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("view:"))
 async def cb_view_result(cb: CallbackQuery):
-    """Детальний перегляд результату"""
+    """Перегляд результату"""
     token = cb.data.split(":")[1]
     result = await get_result(token)
     
@@ -1029,68 +690,43 @@ async def cb_view_result(cb: CallbackQuery):
         await cb.answer("❌ Результат не знайдено", show_alert=True)
         return
     
-    # Формування детального повідомлення
-    test_type = result['test_type']
-    test_info = TESTS.get(test_type, {})
-    test_name = test_info.get('name_full', test_info.get('name', test_type))
-    
-    severity = result.get('severity', 'low')
-    score = result.get('score', 0)
-    
+    test_name = TESTS.get(result['test_type'], {}).get('name', result['test_type'])
     severity_labels = {
-        'low': 'Низький/Норма 🟢',
-        'moderate': 'Помірний/Субнорма 🟡',
-        'high': 'Високий/Відхилення 🟠',
-        'severe': 'Дуже високий/Виражений 🔴'
+        'low': 'Мінімальний/Норма',
+        'moderate': 'Легкий/Субнорма',
+        'high': 'Помірний/Відхилення',
+        'severe': 'Важкий/Виражений'
     }
     
-    completed_at = result.get('completed_at')
-    if isinstance(completed_at, str):
-        try:
-            completed_at = datetime.fromisoformat(completed_at.replace('Z', '+00:00'))
-        except:
-            completed_at = datetime.now()
-    elif not isinstance(completed_at, datetime):
-        completed_at = datetime.now()
-    
-    # Основна інформація
     text = (
-        f"📊 *Детальні результати тестування*\n\n"
-        f"🧪 *Тест:* {test_name}\n"
-        f"👤 *Пацієнт:* {result.get('patient_name', '—')}\n"
-        f"📅 *Дата:* {completed_at.strftime('%d.%m.%Y о %H:%M')}\n\n"
-        f"📈 *Загальний бал:* {score}\n"
-        f"🎯 *Рівень:* {severity_labels.get(severity, severity)}\n\n"
+        f"📊 *Результат тестування*\n\n"
+        f"👤 Пацієнт: *{result['patient_name']}*\n"
+        f"🧪 Тест: {test_name}\n"
+        f"📅 Дата: {result['completed_at'].strftime('%d.%m.%Y %H:%M')}\n\n"
+        f"📈 Загальний бал: *{result['score']}*\n"
+        f"🎯 Рівень: *{severity_labels.get(result['severity'], result['severity'])}*\n"
     )
-    
-    # Додаємо інтерпретацію
-    interp = INTERPRETATIONS.get(test_type, {}).get(severity, {})
-    if interp:
-        text += f"*Інтерпретація:*\n"
-        text += f"_{interp.get('title', '')}_\n\n"
-        text += f"{interp.get('description', '')}\n\n"
-        
-        if interp.get('recommendations'):
-            text += f"*Рекомендації:*\n"
-            for rec in interp.get('recommendations', [])[:3]:  # Перші 3 рекомендації
-                text += f"• {rec}\n"
-    
-    # Додаємо субшкали якщо є (топ-5)
-    subscales = result.get('subscales')
-    if subscales and isinstance(subscales, dict):
-        text += f"\n*Топ-5 шкал:*\n"
-        sorted_scales = sorted(subscales.items(), key=lambda x: x[1], reverse=True)[:5]
-        for scale_name, scale_value in sorted_scales:
-            text += f"• {scale_name}: {scale_value}\n"
-    
-    text += f"\n📥 Повний звіт доступний у форматі PDF"
     
     await cb.message.edit_text(
         text,
-        reply_markup=kb_result_actions(token),
+        reply_markup=kb_session_item(token, has_result=True),
         parse_mode="Markdown"
     )
     await cb.answer()
+
+
+@router.callback_query(F.data.startswith("result:"))
+async def cb_result_detail(cb: CallbackQuery):
+    """Детальний результат"""
+    token = cb.data.split(":")[1]
+    result = await get_result(token)
+    
+    if not result:
+        await cb.answer("❌ Результат не знайдено", show_alert=True)
+        return
+    
+    # Те саме що view, можна додати більше деталей
+    await cb_view_result(cb)
 
 
 @router.callback_query(F.data.startswith("pdf:"))
@@ -1106,8 +742,17 @@ async def cb_download_pdf(cb: CallbackQuery):
         return
     
     try:
+        # Підготовка даних для PDF
+        result_dict = dict(result)
+        
+        # Парсинг subscales з jsonb
+        import json
+        if result_dict.get('answers'):
+            if isinstance(result_dict['answers'], str):
+                result_dict['answers'] = json.loads(result_dict['answers'])
+        
         # Генерація PDF
-        pdf_buffer = generate_pdf_report(result)
+        pdf_buffer = generate_pdf_report(result_dict)
         
         # Відправка
         test_name = TESTS.get(result['test_type'], {}).get('name', result['test_type']).replace(' ', '_')
@@ -1119,7 +764,7 @@ async def cb_download_pdf(cb: CallbackQuery):
         await bot.send_document(
             cb.from_user.id,
             document=pdf_file,
-            caption=f"📄 Психодіагностичний звіт\n\n{result['patient_name']} — {TESTS.get(result['test_type'], {}).get('name_full', '')}"
+            caption=f"📄 Звіт по тестуванню\n{result['patient_name']} — {test_name}"
         )
         
         await cb.answer("✅ PDF надіслано")
@@ -1149,7 +794,7 @@ async def cmd_help(event, state: FSMContext):
         "4️⃣ Отримайте QR-код або посилання\n"
         "5️⃣ Пацієнт проходить тест\n"
         "6️⃣ Ви отримуєте результат автоматично\n"
-        "7️⃣ Переглядайте деталі та завантажуйте PDF\n\n"
+        "7️⃣ Переглядайте та завантажуйте PDF звіти\n\n"
         "*Підтримка:*\n"
         "При виникненні проблем зверніться до адміністратора."
     )
@@ -1182,60 +827,53 @@ async def handle_result_webhook(request):
         doctor_id = session['doctor_id']
         
         # Отримання telegram_id лікаря
-        doctor = supabase.table("doctors")\
-            .select("telegram_id")\
-            .eq("id", doctor_id)\
-            .single()\
-            .execute()
+        pool = await get_db()
+        doctor = await pool.fetchrow(
+            "SELECT telegram_id FROM doctors WHERE id = $1",
+            doctor_id
+        )
         
-        if not doctor.data:
+        if not doctor:
             return web.json_response({'error': 'Doctor not found'}, status=404)
         
         # Формування повідомлення
         test_name = TESTS.get(data.get('test_type', ''), {}).get('name', data.get('test_type', ''))
-        patient_name = data.get('patient_name', session.get('patient_name', '—'))
+        patient_name = data.get('patient_name', session['patient_name'])
         score = data.get('score', '—')
-        severity = data.get('severity', 'low')
+        severity = data.get('severity_ua', data.get('severity', '—'))
         
         severity_emoji = {
             'low': '🟢',
             'moderate': '🟡',
             'high': '🟠',
             'severe': '🔴'
-        }.get(severity, '⚪')
-        
-        severity_labels = {
-            'low': 'Низький/Норма',
-            'moderate': 'Помірний/Субнорма',
-            'high': 'Високий/Відхилення',
-            'severe': 'Дуже високий/Виражений'
-        }
+        }.get(data.get('severity', ''), '⚪')
         
         message = (
             f"{severity_emoji} *Тест завершено!*\n\n"
-            f"👤 *Пацієнт:* {patient_name}\n"
-            f"🧪 *Тест:* {test_name}\n"
-            f"📈 *Бал:* {score}\n"
-            f"🎯 *Рівень:* {severity_labels.get(severity, severity)}\n\n"
-            f"Переглянути детальні результати та завантажити PDF:"
+            f"👤 Пацієнт: *{patient_name}*\n"
+            f"🧪 Тест: {test_name}\n"
+            f"📈 Бал: *{score}*\n"
+            f"🎯 Рівень: *{severity}*\n\n"
+            f"📊 Переглянути детальні результати та завантажити PDF можна через меню:\n"
+            f"/sessions або кнопка \"Завершені тести\""
         )
         
         # Кнопка для швидкого перегляду
         markup = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📊 Переглянути детально", callback_data=f"view:{token}")],
+            [InlineKeyboardButton(text="📊 Переглянути результат", callback_data=f"view:{token}")],
             [InlineKeyboardButton(text="📥 Завантажити PDF", callback_data=f"pdf:{token}")],
-            [InlineKeyboardButton(text="📋 Всі тести", callback_data="menu:completed")],
         ])
         
         # Відправка повідомлення лікарю
         await bot.send_message(
-            doctor.data['telegram_id'],
+            doctor['telegram_id'],
             message,
             parse_mode="Markdown",
             reply_markup=markup
         )
         
-        log.info(f"Result notification sent to doctor {doctor.data['telegram_id']} for token {token}")
+        log.info(f"Result notification sent to doctor {doctor['telegram_id']} for token {token}")
         
         return web.json_response({'status': 'ok'})
         
@@ -1263,6 +901,7 @@ async def setup_bot_menu():
 async def on_startup():
     """Ініціалізація при запуску"""
     log.info("Initializing bot...")
+    await get_db()  # Ініціалізація пулу з'єднань
     await setup_bot_menu()
     log.info("Bot initialized successfully")
 
@@ -1270,6 +909,8 @@ async def on_startup():
 async def on_shutdown():
     """Очищення при зупинці"""
     log.info("Shutting down bot...")
+    if db_pool:
+        await db_pool.close()
     await bot.session.close()
     log.info("Bot shut down")
 
