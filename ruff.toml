@@ -1,0 +1,29 @@
+# Starter Ruff configuration for the initial open-source release.
+#
+# This project has existing production code that was never linted before
+# being open-sourced. Rather than block CI on hundreds of pre-existing
+# style issues, we start with a pragmatic rule set (correctness bugs,
+# unused code, import hygiene, basic modernization) and tighten it over
+# time. See CONTRIBUTING.md.
+
+target-version = "py38"
+exclude = ["legacy", ".venv", "venv"]
+
+[lint]
+# E/F = pycodestyle errors + pyflakes (real bugs, unused names, etc.)
+# I   = import sorting
+# UP  = pyupgrade (modernize syntax for the target Python version)
+select = ["E4", "E7", "E9", "F", "I", "UP"]
+
+# Rules intentionally deferred for now — pre-existing patterns in the
+# production bot code that need a careful, non-mechanical pass rather
+# than a blanket rewrite. Tracked as follow-up issues; remove entries
+# here as they're addressed.
+#
+# BLE001 - blind `except Exception` catches
+# DTZ005 - datetime.now() without a timezone
+# G201   - log.error(..., exc_info=True) instead of log.exception(...)
+# E722   - bare `except:`
+# S110   - try/except/pass without logging
+# ISC004 - implicit string concatenation in a collection literal
+extend-ignore = ["BLE001", "DTZ005", "G201", "E722", "S110", "ISC004"]
