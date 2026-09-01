@@ -33,3 +33,4 @@ n8n-docker/n8n_data/
 # Тестовые артефакты
 tests.db
 mini-app/Untitled
+qr_*.png
