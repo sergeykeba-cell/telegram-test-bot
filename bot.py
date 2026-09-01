@@ -655,7 +655,6 @@ async def cmd_completed(cb: CallbackQuery, state: FSMContext):
     for r in rows:
         test_name = TESTS.get(r["test_type"], {}).get("name", r["test_type"])
         created = r["created_at"].strftime("%d.%m")
-        score = r.get("score", "—")  # noqa: F841 -- TODO: decide whether to surface score in btn_text
         severity = r.get("severity", "—")
         
         severity_emoji = {
