@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Telegram Bot — Психодіагностична платформа
 Оновлена версія з меню, обробкою результатів та PDF звітами
@@ -18,24 +17,26 @@ from io import BytesIO
 import aiohttp
 import asyncpg
 from aiogram import Bot, Dispatcher, F, Router
-from aiogram.filters import CommandStart, Command
+from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
-    Message, CallbackQuery,
-    InlineKeyboardMarkup, InlineKeyboardButton,
-    BufferedInputFile, BotCommand, MenuButtonCommands
+    BotCommand,
+    BufferedInputFile,
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    MenuButtonCommands,
+    Message,
 )
 from aiohttp import web
 from dotenv import load_dotenv
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import cm
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib import colors
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import cm
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 load_dotenv()
 
@@ -231,7 +232,7 @@ def generate_pdf_report(result_data: dict) -> BytesIO:
     
     # Заголовок
     test_name = TESTS.get(result_data.get('test_type', ''), {}).get('name', result_data.get('test_type', ''))
-    story.append(Paragraph(f"ЗВІТ ПРО ТЕСТУВАННЯ", title_style))
+    story.append(Paragraph("ЗВІТ ПРО ТЕСТУВАННЯ", title_style))
     story.append(Paragraph(f"{test_name}", heading_style))
     story.append(Spacer(1, 0.5*cm))
     
@@ -280,22 +281,22 @@ def generate_pdf_report(result_data: dict) -> BytesIO:
             interp = f"Загальний бал {score} свідчить про важкий рівень симптомів ПТСР. Необхідна психотерапевтична допомога."
     elif test_type == 'minmult':
         if severity == 'low':
-            interp = f"Результати в межах норми. Профіль особистості без виражених відхилень."
+            interp = "Результати в межах норми. Профіль особистості без виражених відхилень."
         elif severity == 'moderate':
-            interp = f"Виявлено окремі акцентуації особистості (субнорма). Рекомендується уточнююча діагностика."
+            interp = "Виявлено окремі акцентуації особистості (субнорма). Рекомендується уточнююча діагностика."
         elif severity == 'high':
-            interp = f"Виявлено відхилення в профілі особистості. Необхідна консультація психолога."
+            interp = "Виявлено відхилення в профілі особистості. Необхідна консультація психолога."
         else:
-            interp = f"Виражені відхилення в профілі особистості. Рекомендована психологічна допомога."
+            interp = "Виражені відхилення в профілі особистості. Рекомендована психологічна допомога."
     else:  # schmishek
         if severity == 'low':
-            interp = f"Акцентуації характеру не виявлено. Профіль особистості в межах норми."
+            interp = "Акцентуації характеру не виявлено. Профіль особистості в межах норми."
         elif severity == 'moderate':
-            interp = f"Виявлено акцентуації характеру (варіант норми). Рекомендується врахування при побудові комунікації."
+            interp = "Виявлено акцентуації характеру (варіант норми). Рекомендується врахування при побудові комунікації."
         elif severity == 'high':
-            interp = f"Виявлено виражені акцентуації характеру. Рекомендована консультація психолога."
+            interp = "Виявлено виражені акцентуації характеру. Рекомендована консультація психолога."
         else:
-            interp = f"Виявлено дуже виражені акцентуації характеру. Необхідна психологічна допомога."
+            interp = "Виявлено дуже виражені акцентуації характеру. Необхідна психологічна допомога."
     
     story.append(Paragraph(interp, normal_style))
     story.append(Spacer(1, 0.5*cm))
@@ -654,7 +655,7 @@ async def cmd_completed(cb: CallbackQuery, state: FSMContext):
     for r in rows:
         test_name = TESTS.get(r["test_type"], {}).get("name", r["test_type"])
         created = r["created_at"].strftime("%d.%m")
-        score = r.get("score", "—")
+        score = r.get("score", "—")  # noqa: F841 -- TODO: decide whether to surface score in btn_text
         severity = r.get("severity", "—")
         
         severity_emoji = {

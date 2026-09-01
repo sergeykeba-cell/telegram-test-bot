@@ -2,18 +2,21 @@ import asyncio
 import logging
 import os
 import uuid
-from aiohttp import web
+
+import asyncpg
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
-    Message, CallbackQuery,
-    InlineKeyboardMarkup, InlineKeyboardButton
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
 )
+from aiohttp import web
 from dotenv import load_dotenv
-import asyncpg
 
 load_dotenv()
 
@@ -317,7 +320,6 @@ async def cb_show_result(cb: CallbackQuery):
         sev    = row['severity']
         ai_txt = row['ai_interpretation'] or ""
         tlabel, temoji, _ = TESTS.get(ttype, (ttype, "📋", ""))
-        from datetime import datetime
         dt = row['created_at']
         date_str = dt.strftime("%d.%m.%Y %H:%M") if dt else "—"
         import json as _json
