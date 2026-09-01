@@ -4,7 +4,7 @@
 
 If you discover a security vulnerability in this project, please **do not open a public GitHub issue**.
 
-Instead, report it privately by emailing **[email protected]** with:
+Instead, report it privately via GitHub Security Advisories: go to the **Security** tab of this repo → **Report a vulnerability**. Include:
 
 - A description of the vulnerability and its potential impact
 - Steps to reproduce it
