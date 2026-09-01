@@ -1,15 +1,11 @@
 # Telegram Bot Framework
 aiogram==3.7.0
 
-# Supabase Client
-supabase==2.3.4
+# PostgreSQL driver (used by bot.py and main.py)
+asyncpg==0.29.0
 
 # PDF Generation with Unicode support
 reportlab==4.0.9
-
-# QR Code Generation (local)
-qrcode[pil]==7.4.2
-Pillow==10.2.0
 
 # Environment variables
 python-dotenv==1.0.1
@@ -21,3 +17,9 @@ aiohttp==3.9.3
 certifi==2024.2.2
 charset-normalizer==3.3.2
 idna==3.6
+
+# Note: legacy/bot_supabase.py and legacy/bot_draft.py (kept for
+# historical reference only, not part of the active app) additionally
+# require: supabase==2.3.4, qrcode[pil]==7.4.2, Pillow==10.2.0
+# They are not installed by default since the active bot (bot.py /
+# main.py) doesn't use them.
